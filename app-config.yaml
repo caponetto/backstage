@@ -188,7 +188,7 @@ swf:
   port: 8899
   workflow-service:
     path: ../../plugins/swf-backend/workflows
-    container: quay.io/kiegroup/kogito-swf-devmode:1.40
+    container: quay.io/kiegroup/kogito-swf-devmode-nightly:latest
 
 integrations:
   github:

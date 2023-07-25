@@ -31,6 +31,7 @@ import YAML from 'yaml';
 import { resolve } from 'path';
 import { WorkflowService } from './WorkflowService';
 import { OpenApiService } from './OpenApiService';
+import { DataInputSchemaService } from './DataInputSchemaService';
 
 export interface RouterOptions {
   eventBroker: EventBroker;
@@ -67,11 +68,19 @@ export async function createRouter(
     '../../plugins/swf-backend/workflows:/home/kogito/serverless-workflow-project/src/main/resources';
   const kogitoServiceContainer =
     config.getOptionalString('swf.workflow-service.container') ??
-    'quay.io/kiegroup/kogito-swf-devmode:1.40';
+    'quay.io/kiegroup/kogito-swf-devmode-nightly:latest';
 
+  const githubToken = process.env.BACKSTAGE_GITHUB_TOKEN;
   const openApiService = new OpenApiService(logger, discovery);
+  const dataInputSchemaService = new DataInputSchemaService(
+    logger,
+    githubToken,
+  );
 
-  const workflowService = new WorkflowService(openApiService);
+  const workflowService = new WorkflowService(
+    openApiService,
+    dataInputSchemaService,
+  );
 
   setupInternalRoutes(
     router,

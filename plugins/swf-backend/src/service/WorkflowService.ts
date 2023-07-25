@@ -16,51 +16,104 @@
 import { resolvePackagePath } from '@backstage/backend-common';
 import fs from 'fs-extra';
 import { OpenApiService } from './OpenApiService';
-import { actions_open_api_file_path } from '@backstage/plugin-swf-common';
+import {
+  actions_open_api_file_path,
+  schemas_folder,
+} from '@backstage/plugin-swf-common';
+import { Specification } from '@severlessworkflow/sdk-typescript';
+import { DataInputSchemaService } from './DataInputSchemaService';
+import { join } from 'path';
 
 export class WorkflowService {
   private openApiService: OpenApiService;
+  private dataInputSchemaService: DataInputSchemaService;
   private readonly resourcesPath = `workflows`;
 
-  constructor(openApiService: OpenApiService) {
+  constructor(
+    openApiService: OpenApiService,
+    dataInputSchemaService: DataInputSchemaService,
+  ) {
     this.openApiService = openApiService;
+    this.dataInputSchemaService = dataInputSchemaService;
   }
 
-  async saveWorkflowDefinition(data: any): Promise<any> {
-    const swfId = data.id;
+  async saveWorkflowDefinition(
+    workflow: Specification.Workflow,
+  ): Promise<Specification.Workflow> {
     const definitionsPath = resolvePackagePath(
       `@backstage/plugin-swf-backend`,
-      `${this.resourcesPath}/${swfId}.sw.json`,
+      `${this.resourcesPath}/${workflow.id}.sw.json`,
     );
-    return this.saveFile(definitionsPath, data);
+    const dataInputSchemaPath = await this.saveDataInputSchema(workflow);
+    if (dataInputSchemaPath) {
+      workflow.dataInputSchema = dataInputSchemaPath;
+    }
+
+    await this.saveFile(definitionsPath, workflow);
+    return workflow;
   }
 
-  private saveFile(path: string, data: any) {
-    return fs.writeFile(path, JSON.stringify(data), 'utf8').then(() => data);
+  private async saveFile(path: string, data: any): Promise<void> {
+    await fs.writeFile(path, JSON.stringify(data), 'utf8');
   }
 
-  async saveWorkflowDefinitionFromUrl(url: string): Promise<any> {
-    return this.fetchWorkflowDefinitionFromUrl(url).then(content => {
-      this.saveWorkflowDefinition(content);
-      return content;
-    });
+  async saveWorkflowDefinitionFromUrl(
+    url: string,
+  ): Promise<Specification.Workflow> {
+    const workflow = await this.fetchWorkflowDefinitionFromUrl(url);
+    await this.saveWorkflowDefinition(workflow);
+    return workflow;
   }
 
-  async fetchWorkflowDefinitionFromUrl(url: string): Promise<any> {
+  async fetchWorkflowDefinitionFromUrl(
+    url: string,
+  ): Promise<Specification.Workflow> {
     const response = await fetch(url);
-    return response.json();
+    const json = await response.json();
+    return json as Specification.Workflow;
   }
 
-  async saveOpenApi(): Promise<any> {
+  async saveOpenApi(): Promise<void> {
     const path = resolvePackagePath(
       `@backstage/plugin-swf-backend`,
       `${this.resourcesPath}/${actions_open_api_file_path}`,
     );
-    return this.openApiService.generateOpenApi().then(data => {
-      if (data) {
-        this.saveFile(path, data);
-      }
+    const openApi = await this.openApiService.generateOpenApi();
+    if (!openApi) {
+      return;
+    }
+    await this.saveFile(path, openApi);
+  }
+
+  async saveDataInputSchema(
+    workflow: Specification.Workflow,
+  ): Promise<string | undefined> {
+    const openApi = await this.openApiService.generateOpenApi();
+    const dataInputSchema = await this.dataInputSchemaService.generate({
+      workflow,
+      openApi,
     });
+
+    if (!dataInputSchema) {
+      return undefined;
+    }
+
+    const schemaFiles = [
+      dataInputSchema.compositionSchema,
+      ...dataInputSchema.actionSchemas,
+    ];
+
+    const saveSchemaPromises = schemaFiles.map(schemaFile => {
+      const path = resolvePackagePath(
+        `@backstage/plugin-swf-backend`,
+        join(this.resourcesPath, schemas_folder, schemaFile.fileName),
+      );
+      return this.saveFile(path, schemaFile.jsonSchema);
+    });
+
+    await Promise.all(saveSchemaPromises);
+
+    return join(schemas_folder, dataInputSchema.compositionSchema.fileName);
   }
 
   async deleteWorkflowDefinitionById(swfId: string): Promise<void> {
@@ -68,6 +121,6 @@ export class WorkflowService {
       `@backstage/plugin-swf-backend`,
       `${this.resourcesPath}/${swfId}.sw.json`,
     );
-    return fs.rm(definitionsPath, { force: true });
+    await fs.rm(definitionsPath, { force: true });
   }
 }

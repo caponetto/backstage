@@ -87,6 +87,7 @@ module.exports = () => {
                   source: './dist/envelope',
                   destination: './public/swf/items/',
                 },
+                { source: './dist/fonts', destination: './public/fonts' },
               ],
             },
           },

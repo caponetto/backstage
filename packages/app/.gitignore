@@ -10,3 +10,4 @@ public/serverless-workflow-text-editor-envelope.html
 public/serverless-workflow-text-editor-envelope.js
 public/vendors-node_modules_monaco-editor_esm_vs_language_json_jsonMode_js.bundle.js
 public/*.worker.js
+public/fonts
