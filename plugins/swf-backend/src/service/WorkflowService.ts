@@ -98,6 +98,16 @@ export class WorkflowService {
       return undefined;
     }
 
+    const workflowDataInputSchemaPath = join(
+      schemas_folder,
+      dataInputSchema.compositionSchema.fileName,
+    );
+
+    dataInputSchema.compositionSchema.jsonSchema = {
+      $id: `classpath:/${workflowDataInputSchemaPath}`,
+      ...dataInputSchema.compositionSchema.jsonSchema,
+    };
+
     const schemaFiles = [
       dataInputSchema.compositionSchema,
       ...dataInputSchema.actionSchemas,
@@ -113,7 +123,7 @@ export class WorkflowService {
 
     await Promise.all(saveSchemaPromises);
 
-    return join(schemas_folder, dataInputSchema.compositionSchema.fileName);
+    return workflowDataInputSchemaPath;
   }
 
   async deleteWorkflowDefinitionById(swfId: string): Promise<void> {

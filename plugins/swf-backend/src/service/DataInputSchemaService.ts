@@ -18,10 +18,28 @@ import { Logger } from 'winston';
 import { Specification } from '@severlessworkflow/sdk-typescript';
 import { OpenAPIV3 } from 'openapi-types';
 import { JSONSchema4 } from 'json-schema';
+import { Octokit } from '@octokit/rest';
 
 type SchemaProperties = {
   [k: string]: JSONSchema4;
 };
+
+interface GitHubPath {
+  owner: string;
+  repo: string;
+  ref: string;
+  path: string;
+}
+
+interface GitTreeItem {
+  path: string;
+  type: 'blob' | 'tree';
+}
+
+interface FileData {
+  content: string;
+  encoding: BufferEncoding;
+}
 
 interface JsonSchemaFile {
   fileName: string;
@@ -32,18 +50,6 @@ interface ComposedJsonSchema {
   compositionSchema: JsonSchemaFile;
   actionSchemas: JsonSchemaFile[];
 }
-
-type GitHubFolderContentItem =
-  | { name: string; path: string } & (
-      | {
-          type: 'file';
-          download_url: string;
-        }
-      | {
-          type: 'dir';
-          url: string;
-        }
-    );
 
 const JSON_SCHEMA_VERSION = 'http://json-schema.org/draft-04/schema#';
 const FETCH_TEMPLATE_ACTION_OPERATION_ID = 'fetch:template';
@@ -56,10 +62,15 @@ const Regex = {
 } as const;
 
 export class DataInputSchemaService {
+  private readonly octokit: Octokit;
+  private readonly decoder = new TextDecoder('utf-8');
+
   constructor(
     private readonly logger: Logger,
-    private readonly githubToken: string | undefined,
-  ) {}
+    githubToken: string | undefined,
+  ) {
+    this.octokit = new Octokit({ auth: githubToken });
+  }
 
   public async generate(args: {
     workflow: Specification.Workflow;
@@ -82,6 +93,8 @@ export class DataInputSchemaService {
     const compositionSchema = this.buildSkeleton(compositionTitle);
 
     const actionSchemas: JsonSchemaFile[] = [];
+
+    const templateSchemaPromises: Promise<JsonSchemaFile[]>[] = [];
 
     for (const fn of args.workflow.functions) {
       const operationId = this.extractOperationIdFromWorkflowFunction(fn);
@@ -149,13 +162,17 @@ export class DataInputSchemaService {
       actionSchemas.push(actionSchema);
 
       if (operationId === FETCH_TEMPLATE_ACTION_OPERATION_ID) {
-        const templateSchemas = await this.resolveSchemasFromTemplates({
-          workflow: args.workflow,
-          functionName: fn.name,
-        });
-        actionSchemas.push(...templateSchemas);
+        templateSchemaPromises.push(
+          this.resolveSchemasFromTemplates({
+            workflow: args.workflow,
+            functionName: fn.name,
+          }),
+        );
       }
     }
+
+    const templateSchemas = await Promise.all(templateSchemaPromises);
+    actionSchemas.push(...templateSchemas.flat());
 
     actionSchemas.forEach(actionSchema => {
       compositionSchema.jsonSchema.properties = {
@@ -175,15 +192,15 @@ export class DataInputSchemaService {
     workflow: Specification.Workflow;
     functionName: string;
   }): Promise<JsonSchemaFile[]> {
-    const templateUrlMap = this.resolveGitHubApiUrlMapForTemplates({
+    const pathMap = this.resolveGitHubPathMapForTemplates({
       workflow: args.workflow,
       functionName: args.functionName,
     });
-    if (!templateUrlMap.size) {
+    if (!pathMap.size) {
       return [];
     }
 
-    const inputValuesMap = await this.resolveInputValues(templateUrlMap);
+    const inputValuesMap = await this.resolveInputValues(pathMap);
 
     return Array.from(inputValuesMap)
       .filter(([_, values]) => values.length)
@@ -250,11 +267,11 @@ export class DataInputSchemaService {
       .pop() as OpenAPIV3.OperationObject | undefined;
   }
 
-  private resolveGitHubApiUrlMapForTemplates(args: {
+  private resolveGitHubPathMapForTemplates(args: {
     workflow: Specification.Workflow;
     functionName: string;
-  }): Map<string, string> {
-    const urlMap = new Map();
+  }): Map<string, GitHubPath> {
+    const pathMap = new Map<string, GitHubPath>();
     for (const state of args.workflow.states) {
       const operationState = state as Specification.Operationstate;
       if (!operationState.actions?.length) {
@@ -272,21 +289,32 @@ export class DataInputSchemaService {
       if (!functionRef.arguments?.url) {
         continue;
       }
-      const githubApiUrl = this.convertToGitHubApiUrl(
-        functionRef.arguments.url,
-      );
-      if (!githubApiUrl) {
+      const githubPath = this.convertToGitHubApiUrl(functionRef.arguments.url);
+      if (!githubPath) {
         continue;
       }
-      urlMap.set(action.name, githubApiUrl);
+      pathMap.set(action.name, githubPath);
     }
-    return urlMap;
+    return pathMap;
   }
 
-  private convertToGitHubApiUrl(githubUrl: string): string | undefined {
+  private removeTrailingSlash(path: string): string {
+    if (path.endsWith('/')) {
+      return path.slice(0, -1);
+    }
+    return path;
+  }
+
+  private convertToGitHubApiUrl(githubUrl: string): GitHubPath | undefined {
     const githubApiMatch = githubUrl.match(Regex.GITHUB_API_URL);
     if (githubApiMatch) {
-      return githubUrl;
+      const [, owner, repo, ref, path] = githubApiMatch;
+      return {
+        owner,
+        repo,
+        ref,
+        path: this.removeTrailingSlash(path),
+      };
     }
 
     const githubUrlMatch = githubUrl.match(Regex.GITHUB_URL);
@@ -294,17 +322,22 @@ export class DataInputSchemaService {
       return undefined;
     }
 
-    const [, org, repo, branch, path] = githubUrlMatch;
-    return `https://api.github.com/repos/${org}/${repo}/contents/${path}?ref=${branch}`;
+    const [, owner, repo, ref, path] = githubUrlMatch;
+    return {
+      owner,
+      repo,
+      ref,
+      path: this.removeTrailingSlash(path),
+    };
   }
 
   private async resolveInputValues(
-    urlMap: Map<string, string>,
+    githubPathMap: Map<string, GitHubPath>,
   ): Promise<Map<string, string[]>> {
     const valuesMap = new Map();
-    for (const [name, url] of urlMap) {
+    for (const [name, githubPath] of githubPathMap) {
       try {
-        const values = await this.extractTemplateValuesFromSkeleton(url);
+        const values = await this.extractTemplateValuesFromSkeleton(githubPath);
         valuesMap.set(name, values);
       } catch (e) {
         this.logger.error(e);
@@ -313,52 +346,36 @@ export class DataInputSchemaService {
     return valuesMap;
   }
 
-  private async fetchGitHub(url: string): Promise<Response> {
-    return fetch(url, {
-      headers: this.githubToken
-        ? {
-            Authorization: `Bearer ${this.githubToken}`,
-          }
-        : undefined,
-    });
-  }
-
-  private async fetchGitHubFolderContent(
-    githubUrl: string,
-  ): Promise<GitHubFolderContentItem[]> {
-    const response = await this.fetchGitHub(githubUrl);
-    return await response.json();
-  }
-
-  private async fetchGitHubFileContent(fileUrl: string): Promise<string> {
-    const response = await this.fetchGitHub(fileUrl);
-    return await response.text();
+  private async fetchGitHubFilePaths(repoInfo: GitHubPath): Promise<string[]> {
+    const response = await this.octokit.request(
+      'GET /repos/:owner/:repo/git/trees/:ref',
+      {
+        owner: repoInfo.owner,
+        repo: repoInfo.repo,
+        ref: repoInfo.ref,
+        recursive: 1,
+      },
+    );
+    return response.data.tree
+      .filter((item: GitTreeItem) => item.type === 'blob')
+      .map((item: GitTreeItem) => item.path)
+      .filter((path: string) => path.startsWith(`${repoInfo.path}/`));
   }
 
   private async extractTemplateValuesFromSkeleton(
-    githubUrl: string,
+    githubPath: GitHubPath,
   ): Promise<string[]> {
-    const stack: string[] = [githubUrl];
+    const filePaths = await this.fetchGitHubFilePaths(githubPath);
     const fileMatchPromises: Promise<string[]>[] = [];
 
-    while (stack.length > 0) {
-      const currentUrl = stack.pop();
-      if (!currentUrl) {
-        continue;
-      }
-
-      const folderContent = await this.fetchGitHubFolderContent(currentUrl);
-      folderContent.forEach(content => {
-        if (content.type === 'file') {
-          fileMatchPromises.push(
-            this.extractTemplateValuesFromGitHubFile(content),
-          );
-        } else if (content.type === 'dir') {
-          // TODO: nested folders make this code slower
-          stack.push(content.url);
-        }
-      });
-    }
+    filePaths.forEach(p => {
+      fileMatchPromises.push(
+        this.extractTemplateValuesFromGitHubFile({
+          ...githubPath,
+          path: p,
+        }),
+      );
+    });
 
     const fileMatches = (await Promise.all(fileMatchPromises))
       .flat()
@@ -368,18 +385,19 @@ export class DataInputSchemaService {
   }
 
   private async extractTemplateValuesFromGitHubFile(
-    content: GitHubFolderContentItem,
+    githubPath: GitHubPath,
   ): Promise<string[]> {
-    if (content.type !== 'file') {
-      return [];
-    }
-
-    const matchesInPath = content.path.matchAll(Regex.SKELETON_VALUES);
+    const matchesInPath = githubPath.path.matchAll(Regex.SKELETON_VALUES);
     const valuesInPath = Array.from(matchesInPath, match => match[1]);
 
     try {
-      const fileContent = await this.fetchGitHubFileContent(
-        content.download_url,
+      const content = await this.octokit.repos.getContent({ ...githubPath });
+      if (!content) {
+        return [];
+      }
+      const fileData = content.data as FileData;
+      const fileContent = this.decoder.decode(
+        new Uint8Array(Buffer.from(fileData.content, fileData.encoding)),
       );
       const matchesInContent = fileContent.matchAll(Regex.SKELETON_VALUES);
       const valuesInContent = Array.from(matchesInContent, match => match[1]);

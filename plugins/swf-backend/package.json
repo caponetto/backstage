@@ -35,6 +35,7 @@
     "@backstage/plugin-scaffolder-common": "workspace:^",
     "@backstage/plugin-scaffolder-node": "workspace:^",
     "@backstage/plugin-swf-common": "workspace:^",
+    "@octokit/rest": "^18.5.3",
     "@severlessworkflow/sdk-typescript": "^3.0.3",
     "@types/express": "*",
     "@types/node-fetch": "^2.6.4",
