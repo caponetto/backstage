@@ -56,7 +56,8 @@ const FETCH_TEMPLATE_ACTION_OPERATION_ID = 'fetch:template';
 
 const Regex = {
   SKELETON_VALUES: /\{\{\s*values\.(\w+)\s*\}\}/gi,
-  GITHUB_URL: /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/,
+  GITHUB_URL:
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:tree|blob)\/([^/]+)\/(.+)$/,
   GITHUB_API_URL:
     /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)\?ref=(.+)$/,
 } as const;
@@ -282,18 +283,20 @@ export class DataInputSchemaService {
           (a.functionRef as Specification.Functionref)?.refName ===
           args.functionName,
       );
-      if (!action?.name) {
+      if (!action) {
         continue;
       }
       const functionRef = action.functionRef as Specification.Functionref;
       if (!functionRef.arguments?.url) {
         continue;
       }
+      const templateName =
+        action.name ?? operationState.name ?? functionRef.refName;
       const githubPath = this.convertToGitHubApiUrl(functionRef.arguments.url);
       if (!githubPath) {
         continue;
       }
-      pathMap.set(action.name, githubPath);
+      pathMap.set(templateName, githubPath);
     }
     return pathMap;
   }

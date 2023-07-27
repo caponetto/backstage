@@ -55,7 +55,7 @@ export const CreateSWFPage = () => {
     async (content: string) => {
       try {
         // Check basic details have been entered
-        const workflow = JSON.parse(content) as Specification.Workflow;
+        const workflow = Specification.Workflow.fromSource(content);
         if (workflow.id === to_be_entered) {
           errorApi.post(new Error(`The 'id' must be entered.`));
           return;

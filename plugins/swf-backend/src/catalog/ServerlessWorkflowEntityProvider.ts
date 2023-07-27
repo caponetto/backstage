@@ -32,6 +32,7 @@ import {
 } from '@backstage/plugin-scaffolder-common';
 import YAML from 'yaml';
 import { PluginTaskScheduler } from '@backstage/backend-tasks';
+import { JSONSchema4 } from 'json-schema';
 
 export class ServerlessWorkflowEntityProvider
   implements EntityProvider, EventSubscriber
@@ -147,7 +148,7 @@ export class ServerlessWorkflowEntityProvider
   private makeBackstageTemplateParameters(
     item: SwfItem,
     openApiDefinitions: any,
-  ): TemplateParametersV1beta3 | undefined {
+  ): TemplateParametersV1beta3[] | undefined {
     const id: string = item.id;
     const oaPaths: any = openApiDefinitions.paths;
     if (oaPaths === undefined) {
@@ -165,11 +166,63 @@ export class ServerlessWorkflowEntityProvider
       return undefined;
     }
 
-    return {
-      title: 'Fill in some input parameters',
-      required: oaSchema.required,
-      properties: oaSchema.properties,
-    };
+    // TODO: Review and improve
+    return this.findSchemas({ openApiDefinitions, oaSchema }).map(schema => ({
+      title: schema.title,
+      required: schema.required,
+      properties: schema.properties,
+    }));
+  }
+
+  private findSchemas(args: {
+    openApiDefinitions: JSONSchema4;
+    oaSchema: JSONSchema4;
+  }): JSONSchema4[] {
+    if (!args.oaSchema.properties) {
+      return [];
+    }
+
+    const schemas: JSONSchema4[] = [];
+
+    for (const key of Object.keys(args.oaSchema.properties)) {
+      const property = args.oaSchema.properties[key];
+      if (!property.$ref) {
+        continue;
+      }
+      const referencedSchema = this.findReferencedSchema({
+        rootSchema: args.openApiDefinitions,
+        ref: property.$ref,
+      });
+      if (referencedSchema) {
+        schemas.push(referencedSchema);
+      }
+    }
+
+    if (!schemas.length) {
+      return [args.oaSchema];
+    }
+
+    return schemas;
+  }
+
+  private findReferencedSchema(args: {
+    rootSchema: JSONSchema4;
+    ref: string;
+  }): JSONSchema4 | undefined {
+    const pathParts = args.ref
+      .split('/')
+      .filter(part => !['#', ''].includes(part));
+
+    let current: JSONSchema4 | undefined = args.rootSchema;
+
+    for (const part of pathParts) {
+      current = current?.[part];
+      if (current === undefined) {
+        return undefined;
+      }
+    }
+
+    return current;
   }
 
   private swfToEntities(
@@ -177,19 +230,20 @@ export class ServerlessWorkflowEntityProvider
     openApiDefinitions: any,
   ): TemplateEntityV1beta3[] {
     return items.map(i => {
+      const sanitizedId = i.id.replace(/ /g, '_');
       return {
         apiVersion: 'scaffolder.backstage.io/v1beta3',
         kind: 'Template',
         metadata: {
-          name: i.id,
+          name: sanitizedId,
           title: i.name,
           description: i.description,
           tags: ['experimental', workflow_type],
           annotations: {
             'backstage.io/managed-by-location': `url:${this.kogitoServiceUrl}`,
             'backstage.io/managed-by-origin-location': `url:${this.kogitoServiceUrl}`,
-            'backstage.io/source-location': `url:${this.kogitoServiceUrl}/management/processes/${i.id}/source`,
-            'backstage.io/view-url': `${this.kogitoServiceUrl}/management/processes/${i.id}/source`,
+            'backstage.io/source-location': `url:${this.kogitoServiceUrl}/management/processes/${sanitizedId}/source`,
+            'backstage.io/view-url': `${this.kogitoServiceUrl}/management/processes/${sanitizedId}/source`,
           },
         },
         spec: {
