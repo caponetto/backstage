@@ -124,11 +124,10 @@ export class OpenApiService {
           return;
         }
         Object.entries(object).forEach(([k, v]) => {
-          const invalidOneOfProp = k === 'oneOf' && !object[k].pop().type;
           const invalidConstProperty = k === 'const' && v === '*';
           const invalidTypeArray =
             k === 'type' && v === 'array' && !object.items;
-          if (invalidOneOfProp || invalidConstProperty) {
+          if (invalidConstProperty) {
             delete object[k];
           } else if (invalidTypeArray) {
             // invalid array type that does not contain items property fallback to string

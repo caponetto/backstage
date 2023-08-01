@@ -20,9 +20,18 @@ import { OpenAPIV3 } from 'openapi-types';
 import { JSONSchema4 } from 'json-schema';
 import { Octokit } from '@octokit/rest';
 
-type SchemaProperties = {
-  [k: string]: JSONSchema4;
+type OpenApiSchemaProperties = {
+  [k: string]: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject;
 };
+
+interface WorkflowFunctionArgs {
+  [x: string]: any;
+}
+
+interface WorkflowActionDescriptor {
+  descriptor: string;
+  action: Specification.Action;
+}
 
 interface GitHubPath {
   owner: string;
@@ -55,11 +64,16 @@ const JSON_SCHEMA_VERSION = 'http://json-schema.org/draft-04/schema#';
 const FETCH_TEMPLATE_ACTION_OPERATION_ID = 'fetch:template';
 
 const Regex = {
-  SKELETON_VALUES: /\{\{\s*values\.(\w+)\s*\}\}/gi,
+  VALUES_IN_SKELETON:
+    /\{\{[%-]?\s*values\.(\w+)\s*[%-]?}}|\{%-?\s*if\s*values\.(\w+)\s*(?:%-?})?/gi,
   GITHUB_URL:
     /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:tree|blob)\/([^/]+)\/(.+)$/,
   GITHUB_API_URL:
     /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)\?ref=(.+)$/,
+  NAIVE_ARG_IN_JQ: /^\$\{[^}]*}$|^(\.[^\s.{]+)(?!\.)$/,
+  NON_ALPHA_NUMERIC: /[^a-zA-Z0-9]+/g,
+  SNAKE_CASE: /_([a-z])/g,
+  CAMEL_CASE: /([A-Z])/g,
 } as const;
 
 export class DataInputSchemaService {
@@ -77,103 +91,167 @@ export class DataInputSchemaService {
     workflow: Specification.Workflow;
     openApi: OpenAPIV3.Document;
   }): Promise<ComposedJsonSchema | null> {
-    if (!args.workflow.functions?.length) {
-      this.logger.info('The workflow has no functions. Skipping generation...');
-      return null;
-    }
-
-    if (typeof args.workflow.functions === 'string') {
-      this.logger.info('Functions cannot be string. Skipping generation...');
-      return null;
-    }
-
-    const compositionTitle = args.workflow.name
-      ? `Data Input Schema for ${args.workflow.name}`
-      : 'Data Input Schema';
-
-    const compositionSchema = this.buildSkeleton(compositionTitle);
+    const functionActionMap = this.extractFunctionActionMap(args.workflow);
 
     const actionSchemas: JsonSchemaFile[] = [];
 
-    const templateSchemaPromises: Promise<JsonSchemaFile[]>[] = [];
-
-    for (const fn of args.workflow.functions) {
-      const operationId = this.extractOperationIdFromWorkflowFunction(fn);
+    for (const [fnName, workflowActionsUsingFn] of functionActionMap) {
+      const operationId = this.extractOperationIdByWorkflowFunctionName({
+        workflow: args.workflow,
+        functionName: fnName,
+      });
       if (!operationId) {
         this.logger.info(
-          `No operation id found for function ${fn.name}. Skipping...`,
+          `No operation id found for function ${fnName}. Skipping...`,
         );
         continue;
       }
 
-      const openApiOperation = this.extractOperationFromOpenApi({
+      const refSchema = this.extractSchemaByOperationId({
         openApi: args.openApi,
         operationId,
       });
-      if (!openApiOperation?.requestBody) {
+      if (!refSchema) {
         this.logger.info(
-          `The operation associated with ${operationId} has no requestBody. Skipping...`,
+          `The schema associated with ${operationId} could not be found. Skipping...`,
         );
         continue;
       }
 
-      const requestBodyContent = (
-        openApiOperation.requestBody as OpenAPIV3.RequestBodyObject
-      ).content;
-      if (!requestBodyContent) {
-        this.logger.info(
-          `The request body associated with ${operationId} has no content. Skipping...`,
-        );
-        continue;
-      }
+      const workflowArgsMap = new Map<string, string>();
 
-      const bodyContent = Object.values(requestBodyContent).pop();
-      if (!bodyContent?.schema) {
-        this.logger.info(
-          `The body content associated with ${operationId} has no schema. Skipping...`,
-        );
-        continue;
-      }
+      for (const actionDescriptor of workflowActionsUsingFn) {
+        const functionRefArgs = (
+          actionDescriptor.action.functionRef as Specification.Functionref
+        ).arguments;
+        if (!functionRefArgs) {
+          continue;
+        }
 
-      const $ref = (bodyContent.schema as OpenAPIV3.ReferenceObject).$ref;
-      if (!$ref) {
-        this.logger.info(
-          `The schema associated with ${operationId} has no $ref. Skipping...`,
-        );
-        continue;
-      }
+        const schemaPropsToFilter = { ...(refSchema.properties ?? {}) };
+        const workflowArgsToFilter = {
+          ...functionRefArgs,
+        } as WorkflowFunctionArgs;
 
-      const refKey = $ref.replace('#/components/schemas/', '');
-      const referencedSchema = args.openApi.components?.schemas?.[
-        refKey
-      ] as OpenAPIV3.SchemaObject;
+        if (operationId === FETCH_TEMPLATE_ACTION_OPERATION_ID) {
+          const skeletonValues = await this.extractTemplateValuesFromSkeleton(
+            workflowArgsToFilter,
+          );
 
-      if (!referencedSchema) {
-        this.logger.info(
-          `The ref ${refKey} could not be found for ${operationId}. Skipping...`,
-        );
-        continue;
-      }
+          if (!skeletonValues) {
+            continue;
+          }
 
-      const actionSchema = this.buildSkeleton(operationId);
-      actionSchema.jsonSchema = {
-        ...actionSchema.jsonSchema,
-        ...referencedSchema,
-      };
-      actionSchemas.push(actionSchema);
+          skeletonValues.forEach(v => {
+            schemaPropsToFilter[v] = {
+              title: v,
+              description: `Extracted from ${workflowArgsToFilter.url}`,
+              type: 'string',
+            };
+            schemaPropsToFilter[this.snakeCaseToCamelCase(v)] = {
+              title: this.snakeCaseToCamelCase(v),
+              description: `Extracted from ${workflowArgsToFilter.url}`,
+              type: 'string',
+            };
+            schemaPropsToFilter[this.camelCaseToSnakeCase(v)] = {
+              title: this.camelCaseToSnakeCase(v),
+              description: `Extracted from ${workflowArgsToFilter.url}`,
+              type: 'string',
+            };
+          });
 
-      if (operationId === FETCH_TEMPLATE_ACTION_OPERATION_ID) {
-        templateSchemaPromises.push(
-          this.resolveSchemasFromTemplates({
-            workflow: args.workflow,
-            functionName: fn.name,
+          Object.keys(workflowArgsToFilter.values).forEach(k => {
+            workflowArgsToFilter[k] = workflowArgsToFilter.values[k];
+          });
+        }
+
+        if (refSchema.oneOf?.length) {
+          const oneOfSchema = (
+            refSchema.oneOf as OpenAPIV3.SchemaObject[]
+          ).find(item =>
+            Object.keys(workflowArgsToFilter).some(arg =>
+              Object.keys(item.properties!).includes(arg),
+            ),
+          );
+          if (!oneOfSchema?.properties) {
+            continue;
+          }
+          Object.entries(oneOfSchema.properties).forEach(([k, v]) => {
+            schemaPropsToFilter[k] = {
+              ...(v as OpenAPIV3.BaseSchemaObject),
+            };
+          });
+        }
+
+        const requiredArgsToShow =
+          this.extractRequiredArgsToShow(workflowArgsToFilter);
+        if (!Object.keys(requiredArgsToShow).length) {
+          continue;
+        }
+
+        const filteredProperties: OpenApiSchemaProperties = {};
+        const filteredRequired: string[] = [];
+        for (const [argKey, argValue] of Object.entries(requiredArgsToShow)) {
+          if (!schemaPropsToFilter.hasOwnProperty(argKey)) {
+            continue;
+          }
+          let argId;
+          if (workflowArgsMap.has(argKey)) {
+            if (workflowArgsMap.get(argKey) === argValue) {
+              continue;
+            }
+            argId = this.sanitizeText({
+              text: `${actionDescriptor.descriptor} ${argKey}`,
+              placeholder: '_',
+            });
+          } else {
+            argId = argKey;
+          }
+          workflowArgsMap.set(argId, argValue);
+
+          filteredProperties[argId] = {
+            ...schemaPropsToFilter[argKey],
+          };
+          filteredRequired.push(argKey);
+        }
+
+        const updatedSchema = {
+          properties: Object.keys(filteredProperties).length
+            ? { ...filteredProperties }
+            : undefined,
+          required: filteredRequired.length ? [...filteredRequired] : undefined,
+        };
+
+        if (!updatedSchema.properties) {
+          continue;
+        }
+
+        const actionSchema = this.buildJsonSchemaSkeleton({
+          workflowId: args.workflow.id,
+          title: actionDescriptor.descriptor,
+          filename: this.sanitizeText({
+            text: actionDescriptor.descriptor,
+            placeholder: '_',
           }),
-        );
+        });
+
+        actionSchema.jsonSchema = {
+          ...actionSchema.jsonSchema,
+          ...updatedSchema,
+        };
+        actionSchemas.push(actionSchema);
       }
     }
 
-    const templateSchemas = await Promise.all(templateSchemaPromises);
-    actionSchemas.push(...templateSchemas.flat());
+    if (!actionSchemas.length) {
+      return null;
+    }
+
+    const compositionSchema = this.buildJsonSchemaSkeleton({
+      workflowId: args.workflow.id,
+      filename: `${args.workflow.id}`,
+      title: `Data Input Schema - ${args.workflow.name ?? args.workflow.id}`,
+    });
 
     actionSchemas.forEach(actionSchema => {
       compositionSchema.jsonSchema.properties = {
@@ -189,54 +267,367 @@ export class DataInputSchemaService {
     return { compositionSchema, actionSchemas };
   }
 
-  private async resolveSchemasFromTemplates(args: {
-    workflow: Specification.Workflow;
-    functionName: string;
-  }): Promise<JsonSchemaFile[]> {
-    const pathMap = this.resolveGitHubPathMapForTemplates({
-      workflow: args.workflow,
-      functionName: args.functionName,
+  private async extractTemplateValuesFromSkeleton(
+    workflowArgs: WorkflowFunctionArgs,
+  ): Promise<string[] | undefined> {
+    if (
+      !workflowArgs.url ||
+      !workflowArgs.values ||
+      !Object.keys(workflowArgs.values).length
+    ) {
+      return undefined;
+    }
+    const githubPath = this.convertToGitHubApiUrl(workflowArgs.url.trim());
+    if (!githubPath) {
+      return undefined;
+    }
+    // This call can be expensive
+    return await this.extractTemplateValuesFromSkeletonUrl(githubPath);
+  }
+
+  private extractRequiredArgsToShow(
+    argsToFilter: WorkflowFunctionArgs,
+  ): WorkflowFunctionArgs {
+    return Object.entries(argsToFilter).reduce((obj, [k, v]) => {
+      if (
+        typeof v === 'string' &&
+        Regex.NAIVE_ARG_IN_JQ.test(String(v.trim()))
+      ) {
+        obj[k] = v;
+      }
+      return obj;
+    }, {} as WorkflowFunctionArgs);
+  }
+
+  private extractSchemaByOperationId(args: {
+    openApi: OpenAPIV3.Document;
+    operationId: string;
+  }): OpenAPIV3.SchemaObject | undefined {
+    const openApiOperation = this.extractOperationFromOpenApi({
+      openApi: args.openApi,
+      operationId: args.operationId,
     });
-    if (!pathMap.size) {
-      return [];
+    if (!openApiOperation?.requestBody) {
+      this.logger.info(
+        `The operation associated with ${args.operationId} has no requestBody.`,
+      );
+      return undefined;
     }
 
-    const inputValuesMap = await this.resolveInputValues(pathMap);
+    const requestBodyContent = (
+      openApiOperation.requestBody as OpenAPIV3.RequestBodyObject
+    ).content;
+    if (!requestBodyContent) {
+      this.logger.info(
+        `The request body associated with ${args.operationId} has no content.`,
+      );
+      return undefined;
+    }
 
-    return Array.from(inputValuesMap)
-      .filter(([_, values]) => values.length)
-      .map(([name, values]) => {
-        const templateProperties = values.reduce(
-          (result: SchemaProperties, key: string) => {
-            result[`${key}`] = {
-              title: key,
-              description: key,
-              type: 'string',
-            };
-            return result;
-          },
-          {},
+    const bodyContent = Object.values(requestBodyContent).pop();
+    if (!bodyContent?.schema) {
+      this.logger.info(
+        `The body content associated with ${args.operationId} has no schema.`,
+      );
+      return undefined;
+    }
+
+    const $ref = (bodyContent.schema as OpenAPIV3.ReferenceObject).$ref;
+    if (!$ref) {
+      this.logger.info(
+        `The schema associated with ${args.operationId} has no $ref.`,
+      );
+      return undefined;
+    }
+
+    const refParts = $ref.split('/');
+    const refKey = refParts[refParts.length - 1];
+    return args.openApi.components?.schemas?.[refKey] as OpenAPIV3.SchemaObject;
+  }
+
+  private extractFunctionActionMap(
+    workflow: Specification.Workflow,
+  ): Map<string, WorkflowActionDescriptor[]> {
+    if (!Array.isArray(workflow.functions)) {
+      return new Map();
+    }
+
+    return new Map(
+      workflow.functions.map(fn => {
+        const descriptors = this.extractActionsUsingFunction({
+          workflow,
+          functionRefName: fn.name,
+        });
+        return [fn.name, descriptors];
+      }),
+    );
+  }
+
+  private extractActionsUsingFunction(args: {
+    workflow: Specification.Workflow;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    const descriptors: WorkflowActionDescriptor[] = [];
+    for (const state of args.workflow.states) {
+      if (state.type === 'operation') {
+        descriptors.push(
+          ...this.extractActionsFromOperationStateByFunctionRefName({
+            state,
+            functionRefName: args.functionRefName,
+          }),
         );
+      } else if (state.type === 'parallel') {
+        descriptors.push(
+          ...this.extractActionsFromParallelStateByFunctionRefName({
+            state,
+            functionRefName: args.functionRefName,
+          }),
+        );
+      } else if (state.type === 'foreach') {
+        descriptors.push(
+          ...this.extractActionsFromForeachStateByFunctionRefName({
+            state,
+            functionRefName: args.functionRefName,
+          }),
+        );
+      } else if (state.type === 'event') {
+        descriptors.push(
+          ...this.extractActionsFromEventStateByFunctionRefName({
+            state,
+            functionRefName: args.functionRefName,
+          }),
+        );
+      } else if (state.type === 'callback') {
+        descriptors.push(
+          ...this.extractActionsFromCallbackStateByFunctionRefName({
+            state,
+            functionRefName: args.functionRefName,
+          }),
+        );
+      }
+    }
+    return descriptors;
+  }
 
-        const templateSchema = this.buildSkeleton(name);
-        templateSchema.jsonSchema.properties = {
-          ...templateSchema.jsonSchema.properties,
-          ...templateProperties,
-        };
-        return templateSchema;
+  private buildActionDescriptor(args: {
+    actionName?: string;
+    stateName: string;
+    functionRefName: string;
+    outerItem?:
+      | { name: string } & (
+          | { kind: 'Unique' }
+          | {
+              kind: 'Array';
+              array: Specification.Onevents[] | Specification.Branch[];
+              idx: number;
+            }
+        );
+    actions?: {
+      array: Specification.Action[];
+      idx: number;
+    };
+  }): string {
+    const separator = ' > ';
+    let descriptor = `${args.stateName}`;
+    if (args.outerItem) {
+      if (args.outerItem.kind === 'Unique') {
+        descriptor += `${separator}${args.outerItem.name}`;
+      } else if (args.outerItem.array.length > 1) {
+        descriptor += `${separator}${args.outerItem.name}-${
+          args.outerItem.idx + 1
+        }`;
+      }
+    }
+    if (args.actionName) {
+      descriptor += `${separator}${args.actionName}`;
+    }
+    descriptor += `${separator}${args.functionRefName}`;
+    if (!args.actionName && args.actions && args.actions.array.length > 1) {
+      descriptor += `${separator}${args.actions.idx + 1}`;
+    }
+    return descriptor;
+  }
+
+  private extractActionsFromOperationStateByFunctionRefName(args: {
+    state: Specification.Operationstate;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    if (!args.state.actions) {
+      return [];
+    }
+    return args.state.actions
+      .filter(
+        action =>
+          (action.functionRef as Specification.Functionref)?.refName ===
+          args.functionRefName,
+      )
+      .map<WorkflowActionDescriptor>((action, idx, arr) => {
+        const descriptor = this.buildActionDescriptor({
+          actionName: action.name,
+          stateName: args.state.name!,
+          functionRefName: args.functionRefName,
+          actions: {
+            array: arr,
+            idx,
+          },
+        });
+        return { descriptor, action };
       });
   }
 
-  private sanitize(args: { text: string; placeholder: string }): string {
-    return args.text.replace(/[^a-zA-Z0-9]/g, args.placeholder).toLowerCase();
+  private extractActionsFromParallelStateByFunctionRefName(args: {
+    state: Specification.Parallelstate;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    if (!args.state.branches) {
+      return [];
+    }
+
+    return args.state.branches
+      .map(branch =>
+        branch.actions
+          .filter(
+            action =>
+              (action.functionRef as Specification.Functionref)?.refName ===
+              args.functionRefName,
+          )
+          .map<WorkflowActionDescriptor>((action, idx, arr) => {
+            const descriptor = this.buildActionDescriptor({
+              actionName: action.name,
+              outerItem: {
+                kind: 'Unique',
+                name: branch.name,
+              },
+              stateName: args.state.name!,
+              functionRefName: args.functionRefName,
+              actions: {
+                array: arr,
+                idx,
+              },
+            });
+            return { descriptor, action };
+          }),
+      )
+      .flat();
   }
 
-  private buildSkeleton(title: string): JsonSchemaFile {
-    const fileName = `${this.sanitize({ text: title, placeholder: '_' })}.json`;
+  private extractActionsFromForeachStateByFunctionRefName(args: {
+    state: Specification.Foreachstate;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    if (!args.state.actions) {
+      return [];
+    }
+    return args.state.actions
+      .filter(
+        a =>
+          (a.functionRef as Specification.Functionref)?.refName ===
+          args.functionRefName,
+      )
+      .map<WorkflowActionDescriptor>((action, idx, arr) => {
+        const descriptor = this.buildActionDescriptor({
+          actionName: action.name,
+          stateName: args.state.name!,
+          functionRefName: args.functionRefName,
+          actions: {
+            array: arr,
+            idx,
+          },
+        });
+        return { descriptor, action };
+      });
+  }
+
+  private extractActionsFromEventStateByFunctionRefName(args: {
+    state: Specification.Eventstate;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    if (!args.state.onEvents) {
+      return [];
+    }
+
+    return args.state.onEvents
+      .map((onEvent, eIdx, eArr) => {
+        if (!onEvent.actions) {
+          return [];
+        }
+        return onEvent.actions
+          .filter(
+            action =>
+              (action.functionRef as Specification.Functionref)?.refName ===
+              args.functionRefName,
+          )
+          .map<WorkflowActionDescriptor>((action, aIdx, aArr) => {
+            const descriptor = this.buildActionDescriptor({
+              actionName: action.name,
+              stateName: args.state.name!,
+              functionRefName: args.functionRefName,
+              actions: {
+                array: aArr,
+                idx: aIdx,
+              },
+              outerItem: {
+                kind: 'Array',
+                name: 'onEvent',
+                array: eArr,
+                idx: eIdx,
+              },
+            });
+            return { descriptor, action };
+          });
+      })
+      .flat();
+  }
+
+  private extractActionsFromCallbackStateByFunctionRefName(args: {
+    state: Specification.Callbackstate;
+    functionRefName: string;
+  }): WorkflowActionDescriptor[] {
+    if (!args.state.action) {
+      return [];
+    }
+
+    const refName = (args.state.action.functionRef as Specification.Functionref)
+      ?.refName;
+
+    if (refName !== args.functionRefName) {
+      return [];
+    }
+
+    const descriptor = this.buildActionDescriptor({
+      actionName: args.state.action.name,
+      stateName: args.state.name!,
+      functionRefName: args.functionRefName,
+    });
+
+    return [{ descriptor, action: args.state.action }];
+  }
+
+  private snakeCaseToCamelCase(input: string): string {
+    return input.replace(Regex.SNAKE_CASE, (_, letter) => letter.toUpperCase());
+  }
+
+  private camelCaseToSnakeCase(input: string): string {
+    return input.replace(
+      Regex.CAMEL_CASE,
+      (_, letter) => `_${letter.toLowerCase()}`,
+    );
+  }
+
+  private sanitizeText(args: { text: string; placeholder: string }): string {
+    const parts = args.text.trim().split(Regex.NON_ALPHA_NUMERIC);
+    return parts.join(args.placeholder);
+  }
+
+  private buildJsonSchemaSkeleton(args: {
+    workflowId: string;
+    title: string;
+    filename: string;
+  }): JsonSchemaFile {
     return {
-      fileName,
+      fileName: `${args.workflowId}__schema__${args.filename}.json`,
       jsonSchema: {
-        title: title,
+        title: args.title,
         $schema: JSON_SCHEMA_VERSION,
         type: 'object',
         properties: {},
@@ -248,6 +639,25 @@ export class DataInputSchemaService {
     workflowFunction: Specification.Function,
   ): string {
     return workflowFunction.operation.split('#')[1];
+  }
+
+  private extractOperationIdByWorkflowFunctionName(args: {
+    workflow: Specification.Workflow;
+    functionName: string;
+  }): string | undefined {
+    if (!Array.isArray(args.workflow.functions)) {
+      return undefined;
+    }
+
+    const workflowFunction = args.workflow.functions.find(
+      f => f.name === args.functionName,
+    );
+
+    if (!workflowFunction) {
+      return undefined;
+    }
+
+    return this.extractOperationIdFromWorkflowFunction(workflowFunction);
   }
 
   private extractOperationFromOpenApi(args: {
@@ -266,39 +676,6 @@ export class DataInputSchemaService {
           ),
       )
       .pop() as OpenAPIV3.OperationObject | undefined;
-  }
-
-  private resolveGitHubPathMapForTemplates(args: {
-    workflow: Specification.Workflow;
-    functionName: string;
-  }): Map<string, GitHubPath> {
-    const pathMap = new Map<string, GitHubPath>();
-    for (const state of args.workflow.states) {
-      const operationState = state as Specification.Operationstate;
-      if (!operationState.actions?.length) {
-        continue;
-      }
-      const action = operationState.actions.find(
-        a =>
-          (a.functionRef as Specification.Functionref)?.refName ===
-          args.functionName,
-      );
-      if (!action) {
-        continue;
-      }
-      const functionRef = action.functionRef as Specification.Functionref;
-      if (!functionRef.arguments?.url) {
-        continue;
-      }
-      const templateName =
-        action.name ?? operationState.name ?? functionRef.refName;
-      const githubPath = this.convertToGitHubApiUrl(functionRef.arguments.url);
-      if (!githubPath) {
-        continue;
-      }
-      pathMap.set(templateName, githubPath);
-    }
-    return pathMap;
   }
 
   private removeTrailingSlash(path: string): string {
@@ -334,21 +711,6 @@ export class DataInputSchemaService {
     };
   }
 
-  private async resolveInputValues(
-    githubPathMap: Map<string, GitHubPath>,
-  ): Promise<Map<string, string[]>> {
-    const valuesMap = new Map();
-    for (const [name, githubPath] of githubPathMap) {
-      try {
-        const values = await this.extractTemplateValuesFromSkeleton(githubPath);
-        valuesMap.set(name, values);
-      } catch (e) {
-        this.logger.error(e);
-      }
-    }
-    return valuesMap;
-  }
-
   private async fetchGitHubFilePaths(repoInfo: GitHubPath): Promise<string[]> {
     const response = await this.octokit.request(
       'GET /repos/:owner/:repo/git/trees/:ref',
@@ -365,32 +727,37 @@ export class DataInputSchemaService {
       .filter((path: string) => path.startsWith(`${repoInfo.path}/`));
   }
 
-  private async extractTemplateValuesFromSkeleton(
+  private async extractTemplateValuesFromSkeletonUrl(
     githubPath: GitHubPath,
   ): Promise<string[]> {
-    const filePaths = await this.fetchGitHubFilePaths(githubPath);
-    const fileMatchPromises: Promise<string[]>[] = [];
+    try {
+      const filePaths = await this.fetchGitHubFilePaths(githubPath);
+      const fileMatchPromises: Promise<string[]>[] = [];
 
-    filePaths.forEach(p => {
-      fileMatchPromises.push(
-        this.extractTemplateValuesFromGitHubFile({
-          ...githubPath,
-          path: p,
-        }),
-      );
-    });
+      filePaths.forEach(p => {
+        fileMatchPromises.push(
+          this.extractTemplateValuesFromGitHubFile({
+            ...githubPath,
+            path: p,
+          }),
+        );
+      });
 
-    const fileMatches = (await Promise.all(fileMatchPromises))
-      .flat()
-      .filter((r): r is string => r !== undefined);
+      const fileMatches = (await Promise.all(fileMatchPromises))
+        .flat()
+        .filter((r): r is string => r !== undefined);
 
-    return Array.from(new Set(fileMatches));
+      return Array.from(new Set(fileMatches));
+    } catch (e) {
+      this.logger.error(e);
+    }
+    return [];
   }
 
   private async extractTemplateValuesFromGitHubFile(
     githubPath: GitHubPath,
   ): Promise<string[]> {
-    const matchesInPath = githubPath.path.matchAll(Regex.SKELETON_VALUES);
+    const matchesInPath = githubPath.path.matchAll(Regex.VALUES_IN_SKELETON);
     const valuesInPath = Array.from(matchesInPath, match => match[1]);
 
     try {
@@ -402,8 +769,11 @@ export class DataInputSchemaService {
       const fileContent = this.decoder.decode(
         new Uint8Array(Buffer.from(fileData.content, fileData.encoding)),
       );
-      const matchesInContent = fileContent.matchAll(Regex.SKELETON_VALUES);
-      const valuesInContent = Array.from(matchesInContent, match => match[1]);
+      const matchesInContent = fileContent.matchAll(Regex.VALUES_IN_SKELETON);
+      const valuesInContent = Array.from(
+        matchesInContent,
+        match => match[1] || match[2],
+      );
       return [...valuesInPath, ...valuesInContent];
     } catch (e) {
       this.logger.error(e);
