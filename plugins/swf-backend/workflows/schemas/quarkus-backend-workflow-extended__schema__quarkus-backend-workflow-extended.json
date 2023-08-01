@@ -1,0 +1,20 @@
+{
+  "$id": "classpath:/schemas/quarkus-backend-workflow-extended__schema__quarkus-backend-workflow-extended.json",
+  "title": "Data Input Schema - [SWF] GPT - Create a Quarkus Backend application with a CI pipeline",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "properties": {
+    "Generating the Source Code Component > Fetch Template Action - Source Code > runActionTemplateFetch": {
+      "$ref": "quarkus-backend-workflow-extended__schema__Generating_the_Source_Code_Component_Fetch_Template_Action_Source_Code_runActionTemplateFetch.json",
+      "type": "object"
+    },
+    "Generating the Catalog Info Component > Fetch Template Action - Catalog Info > runActionTemplateFetch": {
+      "$ref": "quarkus-backend-workflow-extended__schema__Generating_the_Catalog_Info_Component_Fetch_Template_Action_Catalog_Info_runActionTemplateFetch.json",
+      "type": "object"
+    },
+    "Publishing to the Source Code Repository > Publish Github Action > runActionPublishGithub": {
+      "$ref": "quarkus-backend-workflow-extended__schema__Publishing_to_the_Source_Code_Repository_Publish_Github_Action_runActionPublishGithub.json",
+      "type": "object"
+    }
+  }
+}

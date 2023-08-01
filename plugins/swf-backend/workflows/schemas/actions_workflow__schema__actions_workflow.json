@@ -1,0 +1,12 @@
+{
+  "$id": "classpath:/schemas/actions_workflow__schema__actions_workflow.json",
+  "title": "Data Input Schema - Catalog:Fetch Workflow BS Actions example",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "properties": {
+    "Execute Action on SWF Plugin > Run Catalog Fetch Action > runActionCatalogFetchFunction": {
+      "$ref": "actions_workflow__schema__Execute_Action_on_SWF_Plugin_Run_Catalog_Fetch_Action_runActionCatalogFetchFunction.json",
+      "type": "object"
+    }
+  }
+}

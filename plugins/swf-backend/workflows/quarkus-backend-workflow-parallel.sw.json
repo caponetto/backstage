@@ -4,7 +4,7 @@
   "specVersion": "0.8",
   "name": "[SWF] GPT - Create a Quarkus Backend application with a CI pipeline",
   "description": "[SWF] Create a starter Quarkus Backend application with a CI pipeline",
-  "dataInputSchema": "schemas/quarkus-backend-workflow-input.json",
+  "dataInputSchema": "schemas/quarkus-backend-workflow-parallel__schema__quarkus-backend-workflow-parallel.json",
   "functions": [
     {
       "name": "runActionTemplateFetch",
@@ -151,9 +151,7 @@
               "allowRebaseMerge": true
             }
           },
-          "actionDataFilter": {
-            "toStateData": ".actionPublishResult"
-          }
+          "actionDataFilter": { "toStateData": ".actionPublishResult" }
         }
       ],
       "transition": "Registering the Catalog Info Component"
@@ -172,9 +170,7 @@
               "catalogInfoPath": "\"/catalog-info.yaml\""
             }
           },
-          "actionDataFilter": {
-            "toStateData": ".actionCatalogRegisterResult"
-          }
+          "actionDataFilter": { "toStateData": ".actionCatalogRegisterResult" }
         }
       ],
       "end": true

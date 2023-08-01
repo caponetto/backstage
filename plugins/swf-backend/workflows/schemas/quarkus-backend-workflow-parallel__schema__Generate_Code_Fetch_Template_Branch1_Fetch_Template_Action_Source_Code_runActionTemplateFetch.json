@@ -1,0 +1,51 @@
+{
+  "title": "Generate Code Fetch Template > Branch1 > Fetch Template Action - Source Code > runActionTemplateFetch",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "properties": {
+    "githubOrg": {
+      "title": "githubOrg",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "repoName": {
+      "title": "repoName",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "description": {
+      "title": "description",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "port": {
+      "title": "port",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "groupId": {
+      "title": "groupId",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "artifactId": {
+      "title": "artifactId",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    },
+    "javaPackageName": {
+      "title": "javaPackageName",
+      "description": "Extracted from https://github.com/janus-idp/software-templates/blob/main/scaffolder-templates/quarkus-backend-template/skeleton",
+      "type": "string"
+    }
+  },
+  "required": [
+    "githubOrg",
+    "repoName",
+    "description",
+    "port",
+    "groupId",
+    "artifactId",
+    "javaPackageName"
+  ]
+}

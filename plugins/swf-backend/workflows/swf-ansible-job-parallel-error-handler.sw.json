@@ -4,7 +4,7 @@
   "specVersion": "0.8",
   "name": "[SWF] Ansible Job - Parallel - Error Handler",
   "description": "[SWF] Launch an Ansible Job within Ansible Automation Platform",
-  "dataInputSchema": "schemas/ansible-workflow-input.json",
+  "dataInputSchema": "schemas/swf-ansible-job-parallel-error-handler__schema__swf-ansible-job-parallel-error-handler.json",
   "errors": [
     {
       "name": "workitemError",
@@ -99,9 +99,7 @@
               "protectEnforceAdmins": false
             }
           },
-          "actionDataFilter": {
-            "results": "."
-          }
+          "actionDataFilter": { "results": "." }
         }
       ],
       "onErrors": [
@@ -126,9 +124,7 @@
               "catalogInfoPath": "/catalog-info.yaml"
             }
           },
-          "actionDataFilter": {
-            "toStateData": ".actionResult"
-          }
+          "actionDataFilter": { "toStateData": ".actionResult" }
         }
       ],
       "end": true
@@ -148,9 +144,7 @@
           }
         }
       ],
-      "end": {
-        "compensate": true
-      }
+      "end": { "compensate": true }
     },
     {
       "name": "Publish to GitHub::Failure::Compensation",

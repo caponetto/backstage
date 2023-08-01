@@ -4,7 +4,7 @@
   "specVersion": "0.8",
   "name": "[SWF] Ansible Job",
   "description": "[SWF] Launch an Ansible Job within Ansible Automation Platform",
-  "dataInputSchema": "schemas/ansible-workflow-input.json",
+  "dataInputSchema": "schemas/swf-ansible-job__schema__swf-ansible-job.json",
   "functions": [
     {
       "name": "runActionTemplateFetch",
@@ -88,9 +88,7 @@
               "protectEnforceAdmins": false
             }
           },
-          "actionDataFilter": {
-            "results": "."
-          }
+          "actionDataFilter": { "results": "." }
         }
       ],
       "transition": "Register Catalog entry"
@@ -109,9 +107,7 @@
               "catalogInfoPath": "/catalog-info.yaml"
             }
           },
-          "actionDataFilter": {
-            "toStateData": ".actionResult"
-          }
+          "actionDataFilter": { "toStateData": ".actionResult" }
         }
       ],
       "end": true

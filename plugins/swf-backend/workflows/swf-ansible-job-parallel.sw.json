@@ -4,7 +4,7 @@
   "specVersion": "0.8",
   "name": "[SWF] Ansible Job - Parallel",
   "description": "[SWF] Launch an Ansible Job within Ansible Automation Platform",
-  "dataInputSchema": "schemas/ansible-workflow-input.json",
+  "dataInputSchema": "schemas/swf-ansible-job-parallel__schema__swf-ansible-job-parallel.json",
   "functions": [
     {
       "name": "runActionTemplateFetch",
@@ -89,9 +89,7 @@
               "protectEnforceAdmins": false
             }
           },
-          "actionDataFilter": {
-            "results": "."
-          }
+          "actionDataFilter": { "results": "." }
         }
       ],
       "transition": "Register Catalog entry"
@@ -110,9 +108,7 @@
               "catalogInfoPath": "/catalog-info.yaml"
             }
           },
-          "actionDataFilter": {
-            "toStateData": ".actionResult"
-          }
+          "actionDataFilter": { "toStateData": ".actionResult" }
         }
       ],
       "end": true

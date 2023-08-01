@@ -1,0 +1,12 @@
+{
+  "title": "Execute Action on SWF Plugin > Run Catalog Fetch Action > runActionCatalogFetchFunction",
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
+  "properties": {
+    "entityRef": {
+      "type": "string",
+      "description": "Entity reference of the entity to get"
+    }
+  },
+  "required": ["entityRef"]
+}
