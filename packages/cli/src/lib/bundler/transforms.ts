@@ -170,14 +170,6 @@ export const transforms = (options: TransformOptions): Transforms => {
       },
     },
     {
-      test: /\.s[ac]ss$/i,
-      use: [
-        require.resolve('style-loader'),
-        require.resolve('css-loader'),
-        require.resolve('sass-loader'),
-      ],
-    },
-    {
       test: /\.css$/i,
       use: [
         isDev

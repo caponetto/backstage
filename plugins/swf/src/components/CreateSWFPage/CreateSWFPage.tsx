@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Grid } from '@material-ui/core';
 import {
   Content,
@@ -22,6 +22,7 @@ import {
   HeaderLabel,
   InfoCard,
   Page,
+  Progress,
   SupportButton,
 } from '@backstage/core-components';
 import { SWFEditor } from '../SWFEditor';
@@ -50,6 +51,7 @@ export const CreateSWFPage = () => {
   const swfApi = useApi(swfApiRef);
   const navigate = useNavigate();
   const definitionLink = useRouteRef(definitionsRouteRef);
+  const [loading, setLoading] = useState(false);
 
   const handleResult = useCallback(
     async (content: string) => {
@@ -84,21 +86,27 @@ export const CreateSWFPage = () => {
             return;
           }
 
+          setLoading(true);
+
           // Try to save
-          swfApi.createWorkflowDefinition('', content).then(swf => {
-            if (!swf?.id) {
-              errorApi.post(new Error('Error creating workflow'));
-            } else {
-              alertApi.post({
-                severity: 'info',
-                message: `Workflow ${swf.id} has been saved.`,
-              });
-              navigate(definitionLink({ swfId: swf.id }));
-            }
-          });
+          swfApi
+            .createWorkflowDefinition('', content)
+            .then(swf => {
+              if (!swf?.id) {
+                errorApi.post(new Error('Error creating workflow'));
+              } else {
+                alertApi.post({
+                  severity: 'info',
+                  message: `Workflow ${swf.id} has been saved.`,
+                });
+                navigate(definitionLink({ swfId: swf.id }));
+              }
+            })
+            .finally(() => setLoading(false));
         });
       } catch (e: any) {
         errorApi.post(new Error(e));
+        setLoading(false);
       }
     },
     [swfEditor, errorApi, swfApi, alertApi, navigate, definitionLink],
@@ -119,6 +127,7 @@ export const CreateSWFPage = () => {
         </ContentHeader>
         <Grid container spacing={3} direction="column">
           <Grid item>
+            {loading && <Progress />}
             <InfoCard
               title={
                 <>
@@ -129,6 +138,7 @@ export const CreateSWFPage = () => {
                     color="primary"
                     type="submit"
                     variant="contained"
+                    disabled={loading}
                     onClick={() => {
                       swfEditor?.getContent().then(content => {
                         if (content) {

@@ -56,10 +56,8 @@ import { parseApiContent } from '@kie-tools/serverless-workflow-service-catalog/
 import { MessageBusClientApi } from '@kie-tools-core/envelope-bus/dist/api';
 import { ServerlessWorkflowCombinedEditorChannelApi } from '@kie-tools/serverless-workflow-combined-editor/dist/api';
 import { ServerlessWorkflowCombinedEditorEnvelopeApi } from '@kie-tools/serverless-workflow-combined-editor/dist/api/ServerlessWorkflowCombinedEditorEnvelopeApi';
-import {
-  SwfCombinedEditorChannelApiImpl,
-  SwfPreviewOptionsChannelApiImpl,
-} from '@kie-tools/serverless-workflow-combined-editor/dist/impl';
+import { SwfPreviewOptionsChannelApiImpl } from '@kie-tools/serverless-workflow-combined-editor/dist/impl/SwfPreviewOptionsChannelApiImpl';
+import { SwfCombinedEditorChannelApiImpl } from '@kie-tools/serverless-workflow-combined-editor/dist/impl/SwfCombinedEditorChannelApiImpl';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-types';
 import { SwfLanguageService } from './channel/SwfLanguageService';
 import { SwfLanguageServiceChannelApiImpl } from './channel/SwfLanguageServiceChannelApiImpl';
